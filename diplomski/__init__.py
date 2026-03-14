@@ -1,0 +1,1 @@
+"""Diplomski project package."""
