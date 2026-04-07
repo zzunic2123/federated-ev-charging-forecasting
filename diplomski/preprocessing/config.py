@@ -14,10 +14,7 @@ class PipelinePaths:
     input_dir: Path = field(init=False)
     output_dir: Path = field(init=False)
     station_hourly_dir: Path = field(init=False)
-    station_splits_dir: Path = field(init=False)
-    centralized_dir: Path = field(init=False)
     artifacts_dir: Path = field(init=False)
-    station_scalers_dir: Path = field(init=False)
     experiments_dir: Path = field(init=False)
     experiments_artifacts_dir: Path = field(init=False)
 
@@ -26,10 +23,7 @@ class PipelinePaths:
         object.__setattr__(self, "input_dir", self.project_root / "data" / "cleaned")
         object.__setattr__(self, "output_dir", output_dir)
         object.__setattr__(self, "station_hourly_dir", output_dir / "station_hourly")
-        object.__setattr__(self, "station_splits_dir", output_dir / "station_splits")
-        object.__setattr__(self, "centralized_dir", output_dir / "centralized")
         object.__setattr__(self, "artifacts_dir", output_dir / "artifacts")
-        object.__setattr__(self, "station_scalers_dir", output_dir / "artifacts" / "station_scalers")
         object.__setattr__(self, "experiments_dir", output_dir / "experiments")
         object.__setattr__(self, "experiments_artifacts_dir", output_dir / "experiments" / "artifacts")
 
@@ -41,7 +35,6 @@ class PreprocessingConfig:
     paths: PipelinePaths = field(default_factory=PipelinePaths)
     time_column: str = "time"
     target_column: str = "volume"
-    station_id_column: str = "station_id"
     expected_columns: tuple[str, ...] = (
         "time",
         "busy",
@@ -69,40 +62,7 @@ class PreprocessingConfig:
             "e_price": "mean",
         }
     )
-    derived_feature_columns: tuple[str, ...] = (
-        "occupancy_rate",
-        "fast_occupancy_rate",
-        "slow_occupancy_rate",
-    )
-    time_feature_columns: tuple[str, ...] = (
-        "hour",
-        "day_of_week",
-        "is_weekend",
-        "hour_sin",
-        "hour_cos",
-        "dow_sin",
-        "dow_cos",
-    )
-    non_scalable_feature_columns: tuple[str, ...] = (
-        "hour",
-        "day_of_week",
-        "is_weekend",
-        "hour_sin",
-        "hour_cos",
-        "dow_sin",
-        "dow_cos",
-    )
     resample_frequency: str = "1h"
-    scaler_name: str = "standard"
-    train_ratio: float = 0.70
-    val_ratio: float = 0.05
-    test_ratio: float = 0.25
-    random_seed: int = 42
-
-    def __post_init__(self) -> None:
-        ratio_sum = self.train_ratio + self.val_ratio + self.test_ratio
-        if abs(ratio_sum - 1.0) > 1e-9:
-            raise ValueError("Train/val/test ratios must sum to 1.0.")
 
 
 DEFAULT_CONFIG = PreprocessingConfig()

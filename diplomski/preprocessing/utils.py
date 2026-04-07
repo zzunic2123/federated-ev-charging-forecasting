@@ -1,10 +1,9 @@
-"""Helper functions for the preprocessing pipeline."""
+"""Shared helper functions for preprocessing and experiment dataset steps."""
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -19,25 +18,15 @@ from .config import PipelinePaths, PreprocessingConfig
 ScalerType = StandardScaler | MinMaxScaler
 
 
-@dataclass
-class SplitFrames:
-    """Container for train, validation, and test dataframes."""
-
-    train: pd.DataFrame
-    val: pd.DataFrame
-    test: pd.DataFrame
-
-
 def ensure_output_directories(paths: PipelinePaths) -> None:
-    """Create the expected output directory structure."""
+    """Create output directories used by the preprocessing workflow."""
 
     for directory in (
         paths.output_dir,
         paths.station_hourly_dir,
-        paths.station_splits_dir,
-        paths.centralized_dir,
         paths.artifacts_dir,
-        paths.station_scalers_dir,
+        paths.experiments_dir,
+        paths.experiments_artifacts_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -55,7 +44,7 @@ def build_aggregation_spec(
     columns: Iterable[str],
     config: PreprocessingConfig,
 ) -> dict[str, Callable[[pd.Series], float] | str]:
-    """Build aggregation rules for the available columns."""
+    """Build aggregation rules for available columns."""
 
     aggregation_spec: dict[str, Callable[[pd.Series], float] | str] = {}
     for column in columns:
@@ -134,10 +123,7 @@ def load_station_csv(
 
     dataframe = dataframe.loc[:, available_columns].copy()
     raw_row_count = len(dataframe)
-    dataframe[config.time_column] = pd.to_datetime(
-        dataframe[config.time_column],
-        errors="coerce",
-    )
+    dataframe[config.time_column] = pd.to_datetime(dataframe[config.time_column], errors="coerce")
 
     invalid_time_rows = int(dataframe[config.time_column].isna().sum())
     if invalid_time_rows:
@@ -210,45 +196,6 @@ def aggregate_to_hourly(
     return hourly, metadata
 
 
-def compute_split_indices(row_count: int, train_ratio: float, val_ratio: float) -> tuple[int, int]:
-    """Compute stable chronological split indices."""
-
-    if row_count <= 0:
-        return 0, 0
-    if row_count == 1:
-        return 1, 1
-    if row_count == 2:
-        return 1, 1
-
-    train_end = int(np.floor(row_count * train_ratio))
-    val_size = int(np.floor(row_count * val_ratio))
-
-    train_end = min(max(train_end, 1), row_count - 2)
-    remaining_after_train = row_count - train_end
-    val_size = min(max(val_size, 1), remaining_after_train - 1)
-    val_end = train_end + val_size
-    return train_end, val_end
-
-
-def split_frame_chronologically(
-    dataframe: pd.DataFrame,
-    config: PreprocessingConfig,
-) -> SplitFrames:
-    """Split a dataframe into train, validation, and test by time order."""
-
-    dataframe = dataframe.sort_values(config.time_column).reset_index(drop=True)
-    train_end, val_end = compute_split_indices(
-        row_count=len(dataframe),
-        train_ratio=config.train_ratio,
-        val_ratio=config.val_ratio,
-    )
-    return SplitFrames(
-        train=dataframe.iloc[:train_end].copy(),
-        val=dataframe.iloc[train_end:val_end].copy(),
-        test=dataframe.iloc[val_end:].copy(),
-    )
-
-
 def safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     """Divide safely and return 0.0 when the denominator is zero or invalid."""
 
@@ -308,112 +255,15 @@ def add_time_features(dataframe: pd.DataFrame, time_column: str) -> pd.DataFrame
     return enriched
 
 
-def reorder_dataset_columns(
-    dataframe: pd.DataFrame,
-    feature_columns: list[str],
-    config: PreprocessingConfig,
-) -> pd.DataFrame:
-    """Apply a stable column order for saved datasets."""
+def save_dataframe(dataframe: pd.DataFrame, output_path: Path) -> None:
+    """Save a dataframe to CSV."""
 
-    ordered_columns = [
-        config.time_column,
-        config.station_id_column,
-        config.target_column,
-        *feature_columns,
-    ]
-    existing_columns = [column for column in ordered_columns if column in dataframe.columns]
-    return dataframe.loc[:, existing_columns].sort_values(config.time_column).reset_index(drop=True)
-
-
-def align_frame_to_feature_columns(
-    dataframe: pd.DataFrame,
-    feature_columns: list[str],
-    config: PreprocessingConfig,
-) -> pd.DataFrame:
-    """Align a dataframe to a reference feature schema."""
-
-    aligned = dataframe.copy()
-    for column in feature_columns:
-        if column not in aligned.columns:
-            aligned[column] = np.nan
-    return reorder_dataset_columns(aligned, feature_columns, config)
-
-
-def prepare_split_frame(
-    split_frame: pd.DataFrame,
-    station_id: str,
-    split_name: str,
-    config: PreprocessingConfig,
-    logger: logging.Logger,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Impute split-local features, add engineered features, and clean rows."""
-
-    prepared = split_frame.sort_values(config.time_column).reset_index(drop=True).copy()
-    base_feature_columns = [
-        column
-        for column in prepared.columns
-        if column not in {config.time_column, config.target_column}
-    ]
-
-    if base_feature_columns:
-        prepared.loc[:, base_feature_columns] = prepared.loc[:, base_feature_columns].ffill().bfill()
-
-    rows_before_drop = len(prepared)
-    required_columns = [config.target_column, *base_feature_columns]
-    required_columns = [column for column in required_columns if column in prepared.columns]
-    remaining_missing_before_drop = count_missing_values(prepared, required_columns)
-
-    if required_columns:
-        prepared = prepared.dropna(subset=required_columns).copy()
-
-    dropped_rows = rows_before_drop - len(prepared)
-    if dropped_rows:
-        logger.warning(
-            "%s/%s dropped %d rows after imputation because required values were still missing.",
-            station_id,
-            split_name,
-            dropped_rows,
-        )
-
-    prepared = add_derived_features(prepared)
-    prepared = add_time_features(prepared, config.time_column)
-    prepared[config.station_id_column] = station_id
-
-    feature_columns = [
-        column
-        for column in prepared.columns
-        if column not in {config.time_column, config.target_column, config.station_id_column}
-    ]
-    scaled_feature_columns = [
-        column
-        for column in feature_columns
-        if column not in config.non_scalable_feature_columns
-    ]
-
-    prepared = reorder_dataset_columns(prepared, feature_columns, config)
-    metadata = {
-        "rows": int(len(prepared)),
-        "dropped_rows": int(dropped_rows),
-        "remaining_missing_before_drop": remaining_missing_before_drop,
-        "time_bounds": describe_time_bounds(prepared, config.time_column),
-        "feature_columns": feature_columns,
-        "scaled_feature_columns": scaled_feature_columns,
-    }
-    return prepared, metadata
-
-
-def merge_feature_columns(existing_columns: list[str], new_columns: list[str]) -> list[str]:
-    """Merge feature lists while preserving first-seen order."""
-
-    merged = list(existing_columns)
-    for column in new_columns:
-        if column not in merged:
-            merged.append(column)
-    return merged
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    dataframe.to_csv(output_path, index=False)
 
 
 def get_scaler(scaler_name: str) -> ScalerType:
-    """Instantiate the configured scaler."""
+    """Instantiate a scaler by name."""
 
     normalized_name = scaler_name.strip().lower()
     if normalized_name == "standard":
@@ -421,67 +271,6 @@ def get_scaler(scaler_name: str) -> ScalerType:
     if normalized_name == "minmax":
         return MinMaxScaler()
     raise ValueError(f"Unsupported scaler '{scaler_name}'.")
-
-
-def scale_split_frames(
-    splits: SplitFrames,
-    scaled_feature_columns: list[str],
-    scaler_name: str,
-) -> tuple[SplitFrames, ScalerType | None]:
-    """Fit a scaler on train and transform validation/test without leakage."""
-
-    scaled_train = splits.train.copy()
-    scaled_val = splits.val.copy()
-    scaled_test = splits.test.copy()
-
-    if not scaled_feature_columns:
-        return SplitFrames(train=scaled_train, val=scaled_val, test=scaled_test), None
-    if scaled_train.empty:
-        raise ValueError("Cannot fit a scaler on an empty training split.")
-
-    scaler = get_scaler(scaler_name)
-    scaler.fit(scaled_train.loc[:, scaled_feature_columns])
-    scaled_train.loc[:, scaled_feature_columns] = scaler.transform(
-        scaled_train.loc[:, scaled_feature_columns]
-    )
-    scaled_val.loc[:, scaled_feature_columns] = scaler.transform(
-        scaled_val.loc[:, scaled_feature_columns]
-    )
-    scaled_test.loc[:, scaled_feature_columns] = scaler.transform(
-        scaled_test.loc[:, scaled_feature_columns]
-    )
-    return SplitFrames(train=scaled_train, val=scaled_val, test=scaled_test), scaler
-
-
-def combine_split_frames(
-    frames: list[pd.DataFrame],
-    feature_columns: list[str],
-    config: PreprocessingConfig,
-) -> pd.DataFrame:
-    """Concatenate split dataframes and align them to a shared schema."""
-
-    if not frames:
-        return pd.DataFrame(
-            columns=[
-                config.time_column,
-                config.station_id_column,
-                config.target_column,
-                *feature_columns,
-            ]
-        )
-
-    aligned_frames = [
-        align_frame_to_feature_columns(frame, feature_columns, config) for frame in frames
-    ]
-    combined = pd.concat(aligned_frames, ignore_index=True)
-    return reorder_dataset_columns(combined, feature_columns, config)
-
-
-def save_dataframe(dataframe: pd.DataFrame, output_path: Path) -> None:
-    """Save a dataframe to CSV."""
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    dataframe.to_csv(output_path, index=False)
 
 
 def save_scaler(scaler: ScalerType, output_path: Path) -> None:
@@ -508,42 +297,8 @@ def json_default(value: Any) -> Any:
 
 
 def save_json(payload: dict[str, Any], output_path: Path) -> None:
-    """Persist JSON metadata using a safe serializer."""
+    """Persist JSON payload."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as file_handle:
         json.dump(payload, file_handle, indent=2, sort_keys=True, default=json_default)
-
-
-def create_sliding_windows(
-    dataframe: pd.DataFrame,
-    feature_columns: list[str],
-    target_column: str,
-    window_size: int,
-    horizon: int = 1,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Optional helper for future sequence models."""
-
-    if window_size <= 0:
-        raise ValueError("window_size must be positive.")
-    if horizon <= 0:
-        raise ValueError("horizon must be positive.")
-
-    feature_matrix = dataframe.loc[:, feature_columns].to_numpy(dtype=float)
-    target_vector = dataframe.loc[:, target_column].to_numpy(dtype=float)
-    sample_count = len(dataframe) - window_size - horizon + 1
-    if sample_count <= 0:
-        return (
-            np.empty((0, window_size, len(feature_columns)), dtype=float),
-            np.empty((0,), dtype=float),
-        )
-
-    windows = []
-    targets = []
-    for start_index in range(sample_count):
-        end_index = start_index + window_size
-        target_index = end_index + horizon - 1
-        windows.append(feature_matrix[start_index:end_index])
-        targets.append(target_vector[target_index])
-
-    return np.asarray(windows, dtype=float), np.asarray(targets, dtype=float)

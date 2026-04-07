@@ -1,5 +1,6 @@
 # AGENTS.md
 
+claude Code will review your code after you   
 ## Project
 Master thesis project: **Primjena federalnog učenja za predviđanje opterećenja u mrežama električnih punionica**
 

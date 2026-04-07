@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-import joblib
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from .config import ExperimentConfig
-from .utils import add_derived_features, add_time_features
-
-
-ScalerType = StandardScaler | MinMaxScaler
+from .utils import (
+    ScalerType,
+    add_derived_features,
+    add_time_features,
+    get_scaler,
+    save_json,
+    save_scaler,
+)
 
 
 @dataclass
@@ -72,17 +72,6 @@ def configure_experiment_logging(log_path: Path) -> logging.Logger:
     logger.addHandler(stream_handler)
 
     return logger
-
-
-def get_scaler(scaler_name: str) -> ScalerType:
-    """Build a scaler by name."""
-
-    name = scaler_name.strip().lower()
-    if name == "standard":
-        return StandardScaler()
-    if name == "minmax":
-        return MinMaxScaler()
-    raise ValueError(f"Unsupported scaler '{scaler_name}'.")
 
 
 def discover_hourly_files(hourly_dir: Path) -> list[Path]:
@@ -537,30 +526,6 @@ def save_partitioned_clients(
             save_split_npz(scenario_dir / client_id / f"{split_name}.npz", X, y, t, station_ids)
 
 
-def save_json(payload: dict[str, Any], output_path: Path) -> None:
-    """Serialize metadata JSON."""
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True, default=_json_default)
-
-
-def _json_default(value: Any) -> Any:
-    """JSON serializer for NumPy/Pandas types."""
-
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable.")
-
-
 def validate_finite_windows(
     windows_by_station: dict[str, WindowSplit],
 ) -> tuple[bool, list[str]]:
@@ -592,9 +557,3 @@ def summarize_partition_counts(
         }
     return summary
 
-
-def save_scaler(scaler: ScalerType, output_path: Path) -> None:
-    """Persist global scaler."""
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(scaler, output_path)
