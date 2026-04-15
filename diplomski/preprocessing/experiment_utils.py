@@ -15,8 +15,6 @@ from .utils import (
     add_derived_features,
     add_time_features,
     get_scaler,
-    save_json,
-    save_scaler,
 )
 
 
@@ -556,4 +554,3 @@ def summarize_partition_counts(
             split_name: int(values[0].shape[0]) for split_name, values in payloads.items()
         }
     return summary
-
