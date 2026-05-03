@@ -24,7 +24,6 @@ class StationProcessingResult:
     """Artifacts produced for one processed station."""
 
     station_id: str
-    source_file: Path
     hourly_rows: int
     metadata: dict[str, Any]
 
@@ -77,7 +76,6 @@ def process_station_file(
     }
     return StationProcessingResult(
         station_id=station_id,
-        source_file=csv_path,
         hourly_rows=int(len(hourly_frame)),
         metadata=station_metadata,
     )

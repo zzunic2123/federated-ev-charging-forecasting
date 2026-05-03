@@ -1,0 +1,9 @@
+# Core data and ML dependencies
+joblib==1.5.3
+numpy==2.4.3
+pandas==3.0.1
+scikit-learn==1.8.0
+torch==2.10.0
+
+# Notebook execution
+jupyter==1.1.1

@@ -34,6 +34,7 @@ env/
 ENV/
 
 # Tooling caches
+.codex
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
